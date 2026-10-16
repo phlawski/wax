@@ -5,10 +5,10 @@ import (
 	"wax/internal/client"
 )
 
-// fetchCollection loads one page of the user's collection.
-func fetchCollection(c *client.Client, page int) tea.Cmd {
+// fetchCollection loads one page of the user's collection, optionally filtered by query.
+func fetchCollection(c *client.Client, query string, page int) tea.Cmd {
 	return func() tea.Msg {
-		resp, err := c.GetCollection(page, 50)
+		resp, err := c.GetCollectionSearch(query, page, 50)
 		if err != nil {
 			return fetchMsg{err: err}
 		}
@@ -16,14 +16,15 @@ func fetchCollection(c *client.Client, page int) tea.Cmd {
 			releases: resp.Releases,
 			total:    resp.Pagination.Items,
 			pages:    resp.Pagination.Pages,
+			query:    query,
 		}
 	}
 }
 
-// searchDB searches the Discogs database.
-func searchDB(c *client.Client, query string, page int) tea.Cmd {
+// searchDB searches the Discogs database with structured params.
+func searchDB(c *client.Client, p client.SearchParams, page int) tea.Cmd {
 	return func() tea.Msg {
-		resp, err := c.Search(query, "release", page, 25)
+		resp, err := c.Search(p, page, 25)
 		if err != nil {
 			return searchResultMsg{err: err}
 		}

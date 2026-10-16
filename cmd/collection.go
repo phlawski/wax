@@ -114,13 +114,26 @@ func releaseRow(r client.ReleaseBasicInfo) []string {
 }
 
 func searchRow(r client.SearchResult) []string {
+	artist, title := splitDiscogsTitle(r.Title)
 	return []string{
-		fmt.Sprintf("%d", r.ID),
-		r.Title,
+		artist,
+		title,
 		r.Year,
 		strings.Join(r.Format, ", "),
 		strings.Join(r.Label, ", "),
 	}
+}
+
+// splitDiscogsTitle splits "Artist – Title" into artist and title.
+// Falls back to ("", full) if no separator found.
+func splitDiscogsTitle(s string) (artist, title string) {
+	if idx := strings.Index(s, " – "); idx != -1 {
+		return strings.TrimSpace(s[:idx]), strings.TrimSpace(s[idx+4:])
+	}
+	if idx := strings.Index(s, " - "); idx != -1 {
+		return strings.TrimSpace(s[:idx]), strings.TrimSpace(s[idx+3:])
+	}
+	return "", s
 }
 
 func artistNames(artists []client.Artist) string {

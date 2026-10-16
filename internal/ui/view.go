@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"wax/internal/client"
@@ -42,7 +43,15 @@ func (m Model) renderHeader() string {
 	var sub string
 	switch m.mode {
 	case viewCollection:
-		sub = styleStatus.Render(fmt.Sprintf("collection  page %d/%d  (%d releases)", m.collectionPage, m.collectionPages, m.collectionTotal))
+		filtered := m.filteredReleases()
+		info := fmt.Sprintf("page %d/%d  %d releases", m.collectionPage, m.collectionPages, m.collectionTotal)
+		if m.collectionQuery != "" {
+			info += fmt.Sprintf("  search: %q", m.collectionQuery)
+		}
+		if m.formatFilter != "" {
+			info += fmt.Sprintf("  format: %s  (%d shown)", m.formatFilter, len(filtered))
+		}
+		sub = styleStatus.Render("collection  " + info)
 	case viewSearch:
 		sub = styleStatus.Render(fmt.Sprintf("search: %q  page %d/%d  (%d results)", m.lastQuery, m.searchPage, m.searchPages, m.searchTotal))
 	case viewDetail:
@@ -54,6 +63,27 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderFooter() string {
+	if m.filtering {
+		typed := m.filterInput.Value()
+		ghost := ""
+		matches := formatCompletions(m.uniqueFormats(), typed)
+		if len(matches) > 0 && typed != "" {
+			idx := 0
+			if len(m.filterMatches) > 0 {
+				idx = m.filterMatchIdx
+			}
+			full := matches[idx]
+			if len(full) > len(typed) {
+				ghost = full[len(typed):]
+			}
+		}
+		cursor := styleFilter.Render("▏")
+		line := styleFilter.Render(":") + " " + styleStatus.Render(typed) + cursor + styleDim.Render(ghost)
+		if m.formatFilter != "" {
+			line += styleDim.Render("  [" + m.formatFilter + "]")
+		}
+		return line
+	}
 	if m.searching {
 		return styleFilter.Render("/") + " " + m.searchInput.View()
 	}
@@ -64,9 +94,13 @@ func (m Model) renderFooter() string {
 		}
 		return styleStatus.Render(s)
 	}
-	help := "↑/↓ k/j move  n/p page  / search  enter detail  esc back  q quit"
+	help := "↑/↓ k/j move  n/p page  / search  : filter format  enter detail  esc clear/back  q quit"
 	if m.mode == viewDetail {
 		help = "↑/↓ k/j scroll  esc back  q quit"
+	}
+	if m.formatFilter != "" {
+		help = styleFilter.Render("["+m.formatFilter+"]") + "  " + styleHelp.Render("esc clear  "+help)
+		return help
 	}
 	return styleHelp.Render(help)
 }
@@ -84,20 +118,51 @@ const (
 func (m Model) renderCollection() string {
 	var b strings.Builder
 
-	// header row
+	releases := m.filteredReleases()
+
 	b.WriteString(renderHeaderRow())
 	b.WriteString("\n")
 
 	visible := visibleRows(m.height - 6)
-	start, end := scrollWindow(m.collectionCursor, len(m.collectionReleases), visible)
+	start, end := scrollWindow(m.collectionCursor, len(releases), visible)
 
 	for i := start; i < end; i++ {
-		r := m.collectionReleases[i]
+		r := releases[i]
 		row := collectionRow(r.BasicInfo)
 		b.WriteString(renderRow(row, i, m.collectionCursor))
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// filteredReleases returns collection releases matching the format filter.
+// Text search is handled server-side via the q= param.
+func (m Model) filteredReleases() []client.CollectionRelease {
+	if m.formatFilter == "" {
+		return m.collectionReleases
+	}
+	fq := strings.ToLower(m.formatFilter)
+	var out []client.CollectionRelease
+	for _, r := range m.collectionReleases {
+		for _, f := range r.BasicInfo.Formats {
+			if strings.Contains(strings.ToLower(f.Name), fq) {
+				out = append(out, r)
+				break
+			}
+			matched := false
+			for _, d := range f.Descriptions {
+				if strings.Contains(strings.ToLower(d), fq) {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				out = append(out, r)
+				break
+			}
+		}
+	}
+	return out
 }
 
 func renderHeaderRow() string {
@@ -162,9 +227,10 @@ func (m Model) renderSearchResults() string {
 
 	for i := start; i < end; i++ {
 		r := m.searchResults[i]
+		artist, title := splitDiscogsTitle(r.Title)
 		row := []string{
-			fmt.Sprintf("%d", r.ID),
-			r.Title,
+			artist,
+			title,
 			r.Year,
 			strings.Join(r.Format, ", "),
 			strings.Join(r.Label, ", "),
@@ -324,6 +390,37 @@ func wrapText(s string, width int) []string {
 	return lines
 }
 
+// uniqueFormats returns sorted unique format names from all loaded collection releases.
+func (m Model) uniqueFormats() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range m.collectionReleases {
+		for _, f := range r.BasicInfo.Formats {
+			if !seen[f.Name] {
+				seen[f.Name] = true
+				out = append(out, f.Name)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// formatCompletions returns formats that have the given prefix (case-insensitive).
+func formatCompletions(formats []string, prefix string) []string {
+	if prefix == "" {
+		return formats
+	}
+	p := strings.ToLower(prefix)
+	var out []string
+	for _, f := range formats {
+		if strings.HasPrefix(strings.ToLower(f), p) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 func visibleRows(h int) int {
@@ -347,6 +444,16 @@ func scrollWindow(cursor, total, visible int) (start, end int) {
 		}
 	}
 	return
+}
+
+func splitDiscogsTitle(s string) (artist, title string) {
+	if idx := strings.Index(s, " – "); idx != -1 {
+		return strings.TrimSpace(s[:idx]), strings.TrimSpace(s[idx+4:])
+	}
+	if idx := strings.Index(s, " - "); idx != -1 {
+		return strings.TrimSpace(s[:idx]), strings.TrimSpace(s[idx+3:])
+	}
+	return "", s
 }
 
 func truncate(s string, max int) string {

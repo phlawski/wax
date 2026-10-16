@@ -22,6 +22,7 @@ type fetchMsg struct {
 	releases []client.CollectionRelease
 	total    int
 	pages    int
+	query    string
 	err      error
 }
 
@@ -71,16 +72,25 @@ type Model struct {
 	collectionPages    int
 	collectionTotal    int
 	collectionCursor   int
+	collectionQuery    string
 
 	// search state
-	searching     bool
-	searchInput   textinput.Model
-	searchResults []client.SearchResult
-	searchPage    int
-	searchPages   int
-	searchTotal   int
-	searchCursor  int
-	lastQuery     string
+	searching        bool
+	searchInput      textinput.Model
+	searchResults    []client.SearchResult
+	searchPage       int
+	searchPages      int
+	searchTotal      int
+	searchCursor     int
+	lastQuery        string
+	lastSearchParams client.SearchParams
+
+	// format filter (k9s-style)
+	filtering      bool
+	filterInput    textinput.Model
+	formatFilter   string
+	filterMatches  []string
+	filterMatchIdx int
 
 	// marketplace state
 	marketplaceListings  []client.MarketplaceListing
@@ -106,17 +116,22 @@ func New(c *client.Client) Model {
 	si.Placeholder = "search Discogs…"
 	si.CharLimit = 100
 
+	fi := textinput.New()
+	fi.Placeholder = "Vinyl, CD, Box Set…"
+	fi.CharLimit = 40
+
 	return Model{
 		client:         c,
 		mode:           viewCollection,
 		loading:        true,
 		spinner:        sp,
 		searchInput:    si,
+		filterInput:    fi,
 		collectionPage: 1,
 	}
 }
 
 // Init fires the initial collection fetch and spinner tick.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, fetchCollection(m.client, 1))
+	return tea.Batch(m.spinner.Tick, fetchCollection(m.client, "", 1))
 }

@@ -113,12 +113,20 @@ type CollectionResponse struct {
 
 // GetCollection returns paginated collection releases for folder 0 (all).
 func (c *Client) GetCollection(page, perPage int) (*CollectionResponse, error) {
+	return c.GetCollectionSearch("", page, perPage)
+}
+
+// GetCollectionSearch returns paginated collection releases filtered by query.
+func (c *Client) GetCollectionSearch(query string, page, perPage int) (*CollectionResponse, error) {
 	path := fmt.Sprintf("/users/%s/collection/folders/0/releases", c.username)
 	params := url.Values{}
 	params.Set("page", fmt.Sprintf("%d", page))
 	params.Set("per_page", fmt.Sprintf("%d", perPage))
 	params.Set("sort", "artist")
 	params.Set("sort_order", "asc")
+	if query != "" {
+		params.Set("q", query)
+	}
 
 	var result CollectionResponse
 	if err := c.get(path, params, &result); err != nil {
@@ -147,12 +155,24 @@ type SearchResponse struct {
 	Results    []SearchResult `json:"results"`
 }
 
-// Search queries the Discogs database.
-func (c *Client) Search(query, searchType string, page, perPage int) (*SearchResponse, error) {
+// SearchParams holds parsed search parameters.
+type SearchParams struct {
+	Query      string
+	Artist     string
+	SearchType string
+}
+
+// Search queries the Discogs database with structured params.
+func (c *Client) Search(p SearchParams, page, perPage int) (*SearchResponse, error) {
 	params := url.Values{}
-	params.Set("q", query)
-	if searchType != "" {
-		params.Set("type", searchType)
+	if p.Query != "" {
+		params.Set("q", p.Query)
+	}
+	if p.Artist != "" {
+		params.Set("artist", p.Artist)
+	}
+	if p.SearchType != "" {
+		params.Set("type", p.SearchType)
 	}
 	params.Set("page", fmt.Sprintf("%d", page))
 	params.Set("per_page", fmt.Sprintf("%d", perPage))

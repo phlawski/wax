@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"wax/internal/client"
 	"wax/pkg/output"
 )
 
@@ -27,7 +28,7 @@ var marketplaceSearchCmd = &cobra.Command{
 		c := newClient()
 
 		// First find the release in the database, then show marketplace listings
-		dbResp, err := c.Search(query, "release", 1, 5)
+		dbResp, err := c.Search(client.SearchParams{Query: query, SearchType: "release"}, 1, 5)
 		if err != nil {
 			return fmt.Errorf("database search failed: %w", err)
 		}

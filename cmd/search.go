@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"wax/internal/client"
 	"wax/pkg/table"
 )
 
@@ -22,7 +23,7 @@ var searchCmd = &cobra.Command{
 		query := strings.Join(args, " ")
 		c := newClient()
 
-		resp, err := c.Search(query, searchType, searchPage, searchPerPage)
+		resp, err := c.Search(client.SearchParams{Query: query, SearchType: searchType}, searchPage, searchPerPage)
 		if err != nil {
 			return fmt.Errorf("search failed: %w", err)
 		}

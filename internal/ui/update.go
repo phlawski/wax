@@ -29,6 +29,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.collectionReleases = msg.releases
 		m.collectionTotal = msg.total
 		m.collectionPages = msg.pages
+		m.collectionQuery = msg.query
 		m.collectionCursor = 0
 		return m, nil
 
@@ -81,21 +82,57 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	// search input active — route keys to text input
+	// filter input active
+	if m.filtering {
+		switch msg.String() {
+		case "tab":
+			prefix := m.filterInput.Value()
+			matches := formatCompletions(m.uniqueFormats(), prefix)
+			if len(matches) == 0 {
+				return m, nil
+			}
+			// cycle through matches on repeated tab
+			if len(matches) != len(m.filterMatches) {
+				m.filterMatches = matches
+				m.filterMatchIdx = 0
+			} else {
+				m.filterMatchIdx = (m.filterMatchIdx + 1) % len(matches)
+			}
+			m.filterInput.SetValue(m.filterMatches[m.filterMatchIdx])
+			m.filterInput.CursorEnd()
+			return m, nil
+		case "enter":
+			m.formatFilter = m.filterInput.Value()
+			m.filtering = false
+			m.filterInput.Blur()
+			m.filterMatches = nil
+			m.collectionCursor = 0
+			return m, nil
+		case "esc":
+			m.filtering = false
+			m.filterInput.Blur()
+			m.filterInput.SetValue(m.formatFilter)
+			m.filterMatches = nil
+			return m, nil
+		default:
+			// reset match cycle when user types
+			m.filterMatches = nil
+			var cmd tea.Cmd
+			m.filterInput, cmd = m.filterInput.Update(msg)
+			return m, cmd
+		}
+	}
+
+	// search input active — fires server-side collection search
 	if m.searching {
 		switch msg.String() {
 		case "enter":
-			query := m.searchInput.Value()
-			if query == "" {
-				m.searching = false
-				return m, nil
-			}
-			m.lastQuery = query
-			m.searchPage = 1
-			m.loading = true
+			q := m.searchInput.Value()
 			m.searching = false
 			m.searchInput.Blur()
-			return m, tea.Batch(m.spinner.Tick, searchDB(m.client, query, 1))
+			m.collectionPage = 1
+			m.loading = true
+			return m, tea.Batch(m.spinner.Tick, fetchCollection(m.client, q, 1))
 		case "esc":
 			m.searching = false
 			m.searchInput.Blur()
@@ -131,6 +168,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "p":
 		return m.prevPage()
 
+	case ":":
+		if m.mode == viewCollection {
+			m.filtering = true
+			m.filterInput.SetValue(m.formatFilter)
+			m.filterInput.Focus()
+			return m, nil
+		}
+
 	case "/":
 		m.searching = true
 		m.searchInput.SetValue("")
@@ -138,16 +183,23 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 
 	case "c":
+		if m.collectionQuery != "" {
+			m.collectionPage = 1
+			m.loading = true
+			return m, tea.Batch(m.spinner.Tick, fetchCollection(m.client, "", 1))
+		}
 		m.mode = viewCollection
-		m.loading = true
-		return m, tea.Batch(m.spinner.Tick, fetchCollection(m.client, m.collectionPage))
+		return m, nil
 
 	case "enter":
-		if m.mode == viewCollection && len(m.collectionReleases) > 0 {
-			r := m.collectionReleases[m.collectionCursor]
-			m.prevMode = viewCollection
-			m.loading = true
-			return m, tea.Batch(m.spinner.Tick, fetchRelease(m.client, r.BasicInfo.ID))
+		if m.mode == viewCollection {
+			releases := m.filteredReleases()
+			if len(releases) > 0 {
+				r := releases[m.collectionCursor]
+				m.prevMode = viewCollection
+				m.loading = true
+				return m, tea.Batch(m.spinner.Tick, fetchRelease(m.client, r.BasicInfo.ID))
+			}
 		}
 		// on search results: open marketplace for selected release
 		if m.mode == viewSearch && len(m.searchResults) > 0 {
@@ -158,7 +210,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 
 	case "esc":
-		if m.mode == viewDetail {
+		if m.mode == viewCollection && m.formatFilter != "" {
+			m.formatFilter = ""
+			m.filterInput.SetValue("")
+			m.collectionCursor = 0
+		} else if m.mode == viewCollection && m.collectionQuery != "" {
+			m.collectionPage = 1
+			m.loading = true
+			return m, tea.Batch(m.spinner.Tick, fetchCollection(m.client, "", 1))
+		} else if m.mode == viewDetail {
 			m.mode = m.prevMode
 		} else if m.mode == viewMarketplace {
 			m.mode = viewSearch
@@ -173,7 +233,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 func (m Model) moveCursor(delta int) Model {
 	switch m.mode {
 	case viewCollection:
-		n := len(m.collectionReleases)
+		n := len(m.filteredReleases())
 		m.collectionCursor = clamp(m.collectionCursor+delta, 0, n-1)
 	case viewSearch:
 		n := len(m.searchResults)
@@ -191,13 +251,13 @@ func (m Model) nextPage() (Model, tea.Cmd) {
 		if m.collectionPage < m.collectionPages {
 			m.collectionPage++
 			m.loading = true
-			return m, tea.Batch(m.spinner.Tick, fetchCollection(m.client, m.collectionPage))
+			return m, tea.Batch(m.spinner.Tick, fetchCollection(m.client, m.collectionQuery, m.collectionPage))
 		}
 	case viewSearch:
 		if m.searchPage < m.searchPages {
 			m.searchPage++
 			m.loading = true
-			return m, tea.Batch(m.spinner.Tick, searchDB(m.client, m.lastQuery, m.searchPage))
+			return m, tea.Batch(m.spinner.Tick, searchDB(m.client, m.lastSearchParams, m.searchPage))
 		}
 	case viewMarketplace:
 		if m.marketplacePage < m.marketplacePages {
@@ -215,13 +275,13 @@ func (m Model) prevPage() (Model, tea.Cmd) {
 		if m.collectionPage > 1 {
 			m.collectionPage--
 			m.loading = true
-			return m, tea.Batch(m.spinner.Tick, fetchCollection(m.client, m.collectionPage))
+			return m, tea.Batch(m.spinner.Tick, fetchCollection(m.client, m.collectionQuery, m.collectionPage))
 		}
 	case viewSearch:
 		if m.searchPage > 1 {
 			m.searchPage--
 			m.loading = true
-			return m, tea.Batch(m.spinner.Tick, searchDB(m.client, m.lastQuery, m.searchPage))
+			return m, tea.Batch(m.spinner.Tick, searchDB(m.client, m.lastSearchParams, m.searchPage))
 		}
 	case viewMarketplace:
 		if m.marketplacePage > 1 {
