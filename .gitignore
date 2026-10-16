@@ -1,0 +1,19 @@
+# binary
+wax
+dist/
+
+# Go
+*.test
+*.out
+coverage.txt
+
+# config (contains token)
+~/.config/wax/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+*.iml
+.vscode/
